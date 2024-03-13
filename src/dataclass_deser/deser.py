@@ -1,15 +1,19 @@
+from __future__ import annotations
+
 import contextlib
 import dataclasses
+import inspect
 import re
 import types
 from typing import Iterator, NoReturn, TypeAlias, TypeVar, Union, cast
 from typing import get_args as get_type_args
 from typing import get_origin as get_type_origin
+from typing import get_type_hints
 
 try:
-    from typing_extensions import assert_never, assert_type
+    from typing_extensions import assert_never
 except ImportError:
-    from typing import assert_never, assert_type
+    from typing import assert_never
 
 __all__ = ("DeserContext",)
 
@@ -106,6 +110,7 @@ class DeserContext:
             return cast(TD, result)
         elif dataclasses.is_dataclass(target_type):
             fields = dataclasses.fields(target_type)
+            field_types = get_type_hints(target_type)
             if not isinstance(value, dict):
                 _unexpected_type(dict)
             remaining_values = dict(value)  # Defensive copy
@@ -123,7 +128,8 @@ class DeserContext:
                         raise DeserError(f"Missing key {key!r} (at {self.context})")
                 with self._add_context(key):
                     raw_value = remaining_values.pop(key)
-                    deser_value = self.deser(field.type, raw_value)
+                    field_type = field_types[key]
+                    deser_value = self.deser(field_type, raw_value)
                     res[key] = deser_value
             if remaining_values and self.strict_keys:
                 raise DeserError(
