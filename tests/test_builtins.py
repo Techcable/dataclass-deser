@@ -1,5 +1,7 @@
 """Tests for deserializing builtin classes"""
 
+from typing import Optional
+
 from dataclass_deser import DeserContext
 
 
@@ -14,6 +16,19 @@ def test_primitives() -> None:
 
     # Conversion int -> float
     assert_roundtrip(float, 7)
+
+
+def test_optional():
+    assert_roundtrip(Optional[int], 7)
+    assert_roundtrip(Optional[int], None)
+    assert_roundtrip(Optional[Optional[int]], 7)
+    assert_roundtrip(Optional[Optional[int]], None)
+
+
+def test_optional_list():
+    assert_roundtrip(Optional[list[int]], None)
+    assert_roundtrip(Optional[list[int]], [3, 7])
+    assert_roundtrip(list[Optional[int]], [3, None, 7])
 
 
 def test_implicit_float_conversions() -> None:

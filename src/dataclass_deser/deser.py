@@ -1,7 +1,8 @@
 import contextlib
 import dataclasses
 import re
-from typing import Iterator, NoReturn, TypeAlias, TypeVar, cast
+import types
+from typing import Iterator, NoReturn, TypeAlias, TypeVar, Union, cast
 from typing import get_args as get_type_args
 from typing import get_origin as get_type_origin
 
@@ -67,8 +68,8 @@ class DeserContext:
                 f"Expected type {expected}, but got {type(value)} (at {self.context})"
             )
 
-        erased_type: type | None = get_type_origin(target_type)
-        if target_type in (str, bool, int, float):
+        erased_type = get_type_origin(target_type)
+        if target_type in (str, bool, int, float, types.NoneType):
             if isinstance(value, target_type):
                 # Need cast for pyright, and ignore for mypy redundant-cast
                 #
@@ -77,14 +78,25 @@ class DeserContext:
                 return cast(TD, value)  # type: ignore
             else:
                 _unexpected_type(target_type)
+        elif erased_type is Union:
+            type_args = get_type_args(target_type)
+            match type_args:
+                case (types.NoneType, element_type) | (element_type, types.NoneType):
+                    # its an Optional type
+                    if value is None:
+                        return cast(TD, value)
+                    else:
+                        return cast(TD, self.deser(element_type, value))
+                case unsupported_combo:
+                    raise NotImplementedError(
+                        f"Union types (except Optional) are NYI: {unsupported_combo}"
+                    )
         elif erased_type is not None and issubclass(erased_type, list):
             type_args = get_type_args(target_type)
-            element_type: type
-            match type_args:
-                case (element_type,):
-                    pass
-                case other:
-                    raise TypeError(f"Bad args for list: {other!r}")
+            try:
+                (element_type,) = type_args
+            except ValueError:
+                raise TypeError(f"Bad type args for list: {type_args!r}") from None
             if not isinstance(value, list):
                 _unexpected_type(list)
             result: list[object] = []
