@@ -101,7 +101,14 @@ class DeserContext:
             for field in fields:
                 key = field.name
                 if key not in remaining_values:
-                    raise DeserError(f"Missing key {key!r} (at {self.context})")
+                    if (
+                        field.default is not dataclasses.MISSING
+                        or field.default_factory not in (None, dataclasses.MISSING)
+                        or not field.init
+                    ):
+                        continue  # skip field not needed
+                    else:
+                        raise DeserError(f"Missing key {key!r} (at {self.context})")
                 with self._add_context(key):
                     raw_value = remaining_values.pop(key)
                     deser_value = self.deser(field.type, raw_value)

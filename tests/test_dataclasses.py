@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Optional
 
 from dataclass_deser import DeserContext
 
@@ -15,6 +15,8 @@ class Config:
     nested: Nested
     foo: int
     bar: str
+    default_int: Optional[int] = None
+    default_list: list[int] = field(default_factory=list)
 
 
 def test_baic_dataclasses():
