@@ -5,22 +5,47 @@ import dataclasses
 import inspect
 import re
 import types
-from typing import Iterator, NoReturn, TypeAlias, TypeVar, Union, cast
+from typing import (
+    Iterator,
+    NoReturn,
+    Optional,
+    TypeAlias,
+    TypeVar,
+    Union,
+    cast,
+)
 from typing import get_args as get_type_args
 from typing import get_origin as get_type_origin
 from typing import get_type_hints
 
-try:
-    from typing_extensions import assert_never
-except ImportError:
-    from typing import assert_never
+from typing_extensions import assert_never, deprecated
 
-__all__ = ("DeserContext",)
+__all__ = ("DeserContext", "DeserError")
 
 SIMPLE_KEY_PATTERN: re.Pattern[str] = re.compile(r"[\w_\-]+")
 
 TD = TypeVar("TD")
 ContextItem: TypeAlias = str | int
+
+
+class DeserLocation(tuple[ContextItem, ...]):
+    def __str__(self) -> str:
+        if not self:
+            return "."
+        res = []
+        for item in reversed(self):
+            match item:
+                case str(key):
+                    if SIMPLE_KEY_PATTERN.fullmatch(key):
+                        res.append(".")
+                        res.append(key)
+                    else:
+                        res.append(f".[{key!r}]")
+                case int(idx):
+                    res.append(f"[{idx}]")
+                case invalid:
+                    assert_never(invalid)
+        return "".join(res)
 
 
 class DeserContext:
@@ -46,30 +71,19 @@ class DeserContext:
         ), f"Expected {expected_state}, got {actual_state}"
 
     @property
+    @deprecated("Replaced with `location` function")
     def context(self) -> str:
+        return str(self.current_location)
+
+    @property
+    def current_location(self) -> DeserLocation:
         """Describe the context as a string"""
-        items = self._context_items
-        if not items:
-            return "."
-        res = []
-        for item in reversed(items):
-            match item:
-                case str(key):
-                    if SIMPLE_KEY_PATTERN.fullmatch(key):
-                        res.append(f".")
-                    else:
-                        res.append(f".[{key!r}]")
-                case int(idx):
-                    res.append(f"[{idx}]")
-                case invalid:
-                    assert_never(invalid)
-        assert res
-        return "".join(res)
+        return DeserLocation(self._context_items)
 
     def deser(self, target_type: type[TD], value: object) -> TD:
         def _unexpected_type(expected: type) -> NoReturn:
             raise DeserError(
-                f"Expected type {expected}, but got {type(value)} (at {self.context})"
+                f"Expected type {expected}, but got {type(value)}", ctx=self
             )
 
         erased_type = get_type_origin(target_type)
@@ -125,7 +139,7 @@ class DeserContext:
                     ):
                         continue  # skip field not needed
                     else:
-                        raise DeserError(f"Missing key {key!r} (at {self.context})")
+                        raise DeserError(f"Missing key {key!r}", ctx=self)
                 with self._add_context(key):
                     raw_value = remaining_values.pop(key)
                     field_type = field_types[key]
@@ -133,7 +147,8 @@ class DeserContext:
                     res[key] = deser_value
             if remaining_values and self.strict_keys:
                 raise DeserError(
-                    f"Unexpected keys {set(remaining_values.keys())} for {target_type} (at {self.context})"
+                    f"Unexpected keys {set(remaining_values.keys())} for {target_type}",
+                    ctx=self,
                 )
             # Try to construct target_type
             return cast(TD, target_type(**res))
@@ -144,4 +159,20 @@ class DeserContext:
 
 
 class DeserError(ValueError):
-    pass
+    context: Optional[DeserContext]
+    location: Optional[DeserLocation]
+
+    def __init__(self, msg: str, /, *, ctx: Optional[DeserContext]):
+        super().__init__(msg)
+        self.context = ctx
+        if ctx is not None:
+            self.location = ctx.current_location
+        else:
+            self.location = None
+
+    def __str__(self) -> str:
+        super_msg = super().__str__()
+        if self.location is not None:
+            return f"{super_msg} (at {self.location})"
+        else:
+            return super_msg
