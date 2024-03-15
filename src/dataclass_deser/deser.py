@@ -8,6 +8,7 @@ import types
 from abc import ABCMeta, abstractmethod
 from typing import (
     TYPE_CHECKING,
+    Any,
     Iterator,
     NoReturn,
     Optional,
@@ -26,8 +27,18 @@ __all__ = ("DeserContext", "DeserializeCustom", "DeserError")
 
 SIMPLE_KEY_PATTERN: re.Pattern[str] = re.compile(r"[\w_\-]+")
 
+
+@dataclasses.dataclass(slots=True)
+class _LocationDictKey:
+    dict_position: int
+    key_value: Any
+
+    def __str__(self) -> str:
+        return DeserLocation._fmt_ctx_item(self)
+
+
 TD = TypeVar("TD")
-ContextItem: TypeAlias = str | int
+ContextItem: TypeAlias = str | int | _LocationDictKey
 
 
 class DeserializeCustom(metaclass=ABCMeta):
@@ -56,22 +67,35 @@ class DeserializeCustom(metaclass=ABCMeta):
 
 
 class DeserLocation(tuple[ContextItem, ...]):
+    @staticmethod
+    def _fmt_ctx_item(item: ContextItem) -> str:
+        match item:
+            case str(key):
+                if SIMPLE_KEY_PATTERN.fullmatch(key):
+                    return f".{key}"
+                else:
+                    return f".[{key!r}]"
+            case int(idx):
+                return f"[{idx}]"
+            case _LocationDictKey(dict_position=dict_pos, key_value=key_value):
+                match key_value:
+                    case str(key):
+                        return DeserLocation._fmt_ctx_item(key)
+                    case int(_) | float(_):
+                        return f".[{key_value!r}]"
+                    case _:
+                        # Dicts preserve ordering, so use that
+                        return f".[#{dict_pos}]"
+            case invalid:
+                assert_never(invalid)
+
     def __str__(self) -> str:
         if not self:
             return "."
         res = []
-        for item in reversed(self):
-            match item:
-                case str(key):
-                    if SIMPLE_KEY_PATTERN.fullmatch(key):
-                        res.append(".")
-                        res.append(key)
-                    else:
-                        res.append(f".[{key!r}]")
-                case int(idx):
-                    res.append(f"[{idx}]")
-                case invalid:
-                    assert_never(invalid)
+        for item in self:
+            res.append(DeserLocation._fmt_ctx_item(item))
+        res.reverse()
         return "".join(res)
 
 
@@ -159,11 +183,26 @@ class DeserContext:
                 raise TypeError(f"Bad type args for list: {type_args!r}") from None
             if not isinstance(value, list):
                 _unexpected_type(list)
-            result: list[object] = []
+            result_list: list[object] = []
             for index, element in enumerate(value):
                 with self._add_context(index):
-                    result.append(self.deser(element_type, element))
-            return cast(TD, result)
+                    result_list.append(self.deser(element_type, element))
+            return cast(TD, result_list)
+        elif erased_type is not None and issubclass(erased_type, dict):
+            type_args = get_type_args(target_type)
+            try:
+                (key_type, value_type) = type_args
+            except ValueError:
+                raise TypeError(f"Bad type args for dict: {type_args!r}") from None
+            if not isinstance(value, dict):
+                _unexpected_type(dict)
+            result_dict: dict[object, object] = {}
+            for item_position, (raw_key, raw_value) in enumerate(value.items()):
+                with self._add_context(_LocationDictKey(item_position, raw_key)):
+                    deser_key = self.deser(key_type, raw_key)
+                    deser_value = self.deser(value_type, raw_value)
+                    result_dict[deser_key] = deser_value
+            return cast(TD, result_dict)
         elif dataclasses.is_dataclass(target_type):
             fields = dataclasses.fields(target_type)
             field_types = get_type_hints(target_type)

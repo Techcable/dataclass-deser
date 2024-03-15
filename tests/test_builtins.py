@@ -40,5 +40,9 @@ def test_basic_list():
     assert_roundtrip(list[int], [3, 4, 7])
 
 
+def test_string_dict():
+    assert_roundtrip(dict[str, int], dict(foo=3, bar=7))
+
+
 def test_nested_list():
     assert_roundtrip(list[list[int]], [[3, 7], [], [8, 9]])
