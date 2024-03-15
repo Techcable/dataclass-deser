@@ -5,7 +5,9 @@ import dataclasses
 import inspect
 import re
 import types
+from abc import ABCMeta, abstractmethod
 from typing import (
+    TYPE_CHECKING,
     Iterator,
     NoReturn,
     Optional,
@@ -18,14 +20,39 @@ from typing import get_args as get_type_args
 from typing import get_origin as get_type_origin
 from typing import get_type_hints
 
-from typing_extensions import assert_never, deprecated
+from typing_extensions import Self, assert_never, deprecated, final
 
-__all__ = ("DeserContext", "DeserError")
+__all__ = ("DeserContext", "DeserializeCustom", "DeserError")
 
 SIMPLE_KEY_PATTERN: re.Pattern[str] = re.compile(r"[\w_\-]+")
 
 TD = TypeVar("TD")
 ContextItem: TypeAlias = str | int
+
+
+class DeserializeCustom(metaclass=ABCMeta):
+    """A type that supports custom deserialization"""
+
+    @classmethod
+    @abstractmethod
+    def _deser_custom(self, ctx: DeserContext, value: object) -> Self:
+        pass
+
+    @classmethod
+    @final
+    def _deser_default(cls, ctx: DeserContext, value: object) -> Self:
+        assert isinstance(ctx, DeserContext)
+        if id(value) in ctx._ignore_deserialize_custom:
+            raise DeserError(
+                f"Already supposed to ignore object (recursion?): {cls}, {value!r}",
+                ctx=ctx,
+            )
+        ctx._ignore_deserialize_custom.add(id(value))
+        try:
+            result = ctx.deser(cls, value)
+        finally:
+            ctx._ignore_deserialize_custom.remove(id(value))
+        return result
 
 
 class DeserLocation(tuple[ContextItem, ...]):
@@ -53,10 +80,12 @@ class DeserContext:
     strict_keys: bool
     # State
     _context_items: list[ContextItem]
+    _ignore_deserialize_custom: set[int]
 
     def __init__(self) -> None:
         self.strict_keys = True
         self._context_items = []
+        self._ignore_deserialize_custom = set()
 
     @contextlib.contextmanager
     def _add_context(self, item: ContextItem) -> Iterator[None]:
@@ -109,6 +138,19 @@ class DeserContext:
                     raise NotImplementedError(
                         f"Union types (except Optional) are NYI: {unsupported_combo}"
                     )
+        elif (
+            issubclass(
+                deser_custom_type := (erased_type or target_type),
+                DeserializeCustom,
+            )
+            and id(value) not in self._ignore_deserialize_custom
+        ):
+            return cast(
+                TD,
+                cast(type[DeserializeCustom], deser_custom_type)._deser_custom(
+                    self, value
+                ),
+            )
         elif erased_type is not None and issubclass(erased_type, list):
             type_args = get_type_args(target_type)
             try:
