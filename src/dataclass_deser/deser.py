@@ -95,7 +95,6 @@ class DeserLocation(tuple[ContextItem, ...]):
         res = []
         for item in self:
             res.append(DeserLocation._fmt_ctx_item(item))
-        res.reverse()
         return "".join(res)
 
 
@@ -134,9 +133,10 @@ class DeserContext:
         return DeserLocation(self._context_items)
 
     def deser(self, target_type: type[TD], value: object) -> TD:
-        def _unexpected_type(expected: type) -> NoReturn:
+        def _unexpected_type(expected: str, *, target: str | None=None) -> NoReturn:
+            target_info = "" if target is None else f" for {target}"
             raise DeserError(
-                f"Expected type {expected}, but got {type(value)}", ctx=self
+                f"Expected a {expected}{target_info}, but got {type(value)}", ctx=self
             )
 
         erased_type = get_type_origin(target_type)
@@ -148,7 +148,7 @@ class DeserContext:
                 # because then mypy gives redundant-ignore
                 return cast(TD, value)  # type: ignore
             else:
-                _unexpected_type(target_type)
+                _unexpected_type(str(target_type))
         elif erased_type is Union:
             type_args = get_type_args(target_type)
             match type_args:
@@ -182,7 +182,7 @@ class DeserContext:
             except ValueError:
                 raise TypeError(f"Bad type args for list: {type_args!r}") from None
             if not isinstance(value, list):
-                _unexpected_type(list)
+                _unexpected_type('list')
             result_list: list[object] = []
             for index, element in enumerate(value):
                 with self._add_context(index):
@@ -195,7 +195,7 @@ class DeserContext:
             except ValueError:
                 raise TypeError(f"Bad type args for dict: {type_args!r}") from None
             if not isinstance(value, dict):
-                _unexpected_type(dict)
+                _unexpected_type('dict')
             result_dict: dict[object, object] = {}
             for item_position, (raw_key, raw_value) in enumerate(value.items()):
                 with self._add_context(_LocationDictKey(item_position, raw_key)):
@@ -207,7 +207,7 @@ class DeserContext:
             fields = dataclasses.fields(target_type)
             field_types = get_type_hints(target_type)
             if not isinstance(value, dict):
-                _unexpected_type(dict)
+                _unexpected_type('dict', target=target_type)
             remaining_values = dict(value)  # Defensive copy
             res: dict[str, object] = {}
             for field in fields:
